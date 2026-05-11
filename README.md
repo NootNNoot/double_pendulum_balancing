@@ -125,4 +125,126 @@ Several iterations were required to correctly:
 - Separate controllable and uncontrollable joints,
 - Correctly map gravity torques to the arm controller.
 
+## PD-Based Balancing
 
+### Initial Pendulum Balancing
+
+After basic gravity compensation, I introduced basic PD balancing logic to try and stabilize the two goal joints. The first attempt was to us this PD Law: 
+
+$$u = -k_p\theta_p - k_d\dot{\theta_p} - k_{j6}\theta_{j6} - k_{dj6}\dot{\theta_{j6}}$$
+
+where 
+- $$\theta_p$$ is the pendulum angle
+- $$\theta_{j6}$$ is the wrist angle
+- Rest of the terms are angular velocities
+
+The resulting balancing was distributed across multiple arm joints with the highest impacts on pendulum movements: 
+
+$$\tau = \begin{bmatrix} 0.15u & 0.35u & 0.35u & 0 & 0 & 0.05u \end{bmatrix}$$
+
+#### Emergent Swingup Behaviour
+
+One particularly interesting result was that increasing derivative gains on joint6 unintentionally created a natural swing-up controller.
+
+The arm began injecting energy into the pendulum through wrist oscillations, occasionally bringing the pendulum near the upright configuration.
+
+However, the controller could not stabilize the pendulum after swing-up because the gains became too aggressive near equilibrium, oscillations grew uncontrollably, and the arm drifted away from its nominal pose. This highlighted a fundamental limitation of the hand-tuned PD approach.
+
+## Transition to LQR 
+
+The PD controller relied heavily on manual tuning and lacked a true model of the coupled arm-pendulum dynamics.
+
+This motivated a transition toward Linear Quadratic Regulation (LQR), which computes optimal feedback gains for a linearized system.
+
+Since we can model the continuous nonlinear dynamics via $$\dot{x} = f(x, u)$$< we can approximate near an equilibrium with
+
+$$x_{k+1} = Ax_k + Bu_k$$
+
+where the optimal control law then becomes $$u = -Kx$$ where $$K$$ minimizes the quadratic cost
+
+$$J = \sum{x^T_kQx_k + u^T_kRu_k}$$
+
+### Pinocchio Based Dynamics Modeling
+
+Since KDL was insufficient for the required dynamics linearization, I turned to using Pinocchio for forward dynamics, rigid-body dynamics, articulated-body algorithms, and state-space linearization tools.
+
+In which I implemented:
+
+- Finite-difference linearization
+- Automatic state extraction
+- Discrete-time system generation
+
+The finite difference linearization worked to estimate the $$A$$ and $$B$$ matrices in the LQR equation by perturbing the initial state and simulating the changes, where
+
+$$A_i = \frac{f(x + \epsilon e_i, u) - f(x - \epsilon e_i, u)}{2\epsilon}$$
+
+$$B_j = \frac{f(x, u  + \epsilon e_j) - f(x, u - \epsilon e_j)}{2\epsilon}$$
+
+which produced a 14x14 state transition matrix $$A$$ and a 14x6 control matrix $$B$$. 
+
+The system was then linearized around the nominal configuration: 
+
+$$q_{nom} = \begin{bmatrix} 0 & 0.79 & 0.79 & 0 & 0 & 0 & 0 \end{bmatrix}$$
+
+### LQR Gain Generation 
+
+To get the gain matrix $$K$$, we solve the Discrete-Time Algebraic Riccati Equation (DARE) with
+`solve_discrete_are()` from SciPy. 
+
+This gain matrix is of the form: 
+
+$$K = (B^TPB + R)^{-1}B^TPA$$
+
+From this, several challenges did still happen via
+- Continuous joint representation
+- Unstable Linearization
+- Incorrect Handling of Revolute Joints
+
+## Results
+
+### Succusses
+
+The project successfully achieved:
+
+- Robust gravity compensation
+- Stable torque-level arm control
+- Coupled rigid-body dynamics modeling
+- Finite-difference linearization
+- Valid LQR gain generation
+- Automated simulation resets
+
+The arm was able to:
+
+- Maintain nominal poses
+- Inject swing-up energy
+- Occasionally bring the pendulum near upright
+
+### Remaining Challenges
+
+Even though a lot of preogress was made in building the LQR controller with gravity compensation, a lot of the challenges I faced during the project blocked me from acheiving true stabilization such as: 
+
+- Highly nonlinear dynamics,
+- Difficult underactuated coupling
+- Sensitivity near equilibrium,
+- Instability during the transition from swing-up to stabilization.
+
+The primary challenge was that:
+
+- Swing-up required aggressive energy injection,
+- While stabilization required extremely precise damping.
+
+The controller frequently overshot the equilibrium position, destabilized the wrist, and drifted away from the nominal arm configuration due to challenges stabilizing the pendulum
+
+## Future Work
+
+This project demonstrated how rapidly robotic control problems become difficult when moving from low-dimensional systems to high-dimensional articulated manipulators.
+
+Although a fully stable balancing controller was not achieved, the project made significant progress toward a complete solution.
+
+Future work would include:
+
+- Full-state LQR using improved linearization,
+- Using Model Predictive Control (MPC) instead of LQR
+- Reinforcement learning approaches
+- Trajectory optimization
+- Improved state estimation in the world frame
